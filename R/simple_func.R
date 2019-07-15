@@ -1,11 +1,11 @@
 
 #' Trim a data set based on one permutation of variabls
 #'
-#' @param ...
-#' @param data
-#' @param min_ses_num
-#' @param max_ses_num
-#' @param max_courses
+#' @param ... additional variables passed on from other functions
+#' @param data data to use
+#' @param min_ses_num Minimum number of sessions required
+#' @param max_ses_num Maximum number of sessions allowed
+#' @param max_courses Maximum number of courses of treatment allowed
 #' @param completers_only
 #' @param min_sev_baseline
 #' @param min_sev_BDI
