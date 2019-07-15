@@ -1,0 +1,608 @@
+---
+title: "Specification Curves"
+author: "Andrew McAleavey"
+date: "7/11/2019"
+output: 
+  html_document:
+    code_download: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+This document accompanies slides presented at the Society for Psychotherapy Research on 5 July 2019 by Andrew McAleavey. Please contact me with any questions at: andrew *dot* mcaleavey *at* gmail *dot* com.   
+
+This is my attempt to provide code and explanation for specification curves in a way that others can implement directly. I am aware that my code is *far* from perfect and would welcome feedback; most of my goal was to get the project running, not perfect at this stage. 
+
+### Outline
+
+This document is complex but it essentially has two parts:  
+
+1. Function definitions  
+2. Application in simulated data  
+
+The functions developed in Part 1 are rolled into two functions that are actually applied in practice to real data. Everything else is just component parts. 
+
+Before we get into it, I need to call some libraries that are used heavily here:
+```{r packages}
+library(lmerTest)  # this is a convenience package replacement for {lme4}
+library(tidyverse)  # this is a meta package with many data manipulation, coding, and visualization tools
+```
+
+
+### Part 1: Functions
+
+The first function, `trim_data()`, takes a data set and filters it according to the supplied parameters. It returns just ONE data set based on ONE set of parameters. 
+
+```{r}
+trim_data <- function(..., 
+                      data, 
+                      min_ses_num = 0, 
+                      max_ses_num = 10000, 
+                      max_courses = 1,
+                      completers_only = FALSE, 
+                      min_sev_baseline = 0, 
+                      min_sev_BDI = 0,
+                      min_sev_BAI = 0, 
+                      min_obs = 0, 
+                      use_obs = c("all", "prepost", "post"), 
+                      param_list = NULL){  # param_list is an optional whole replacement
+  
+  if(!is.null(param_list)){  # if param_list supplied
+    # re-assign all values to the param_list version
+    # this is an option that comes in handy sometimes, not always needed.
+    data <- param_list$data
+    min_ses_num <- param_list$min_ses_num
+    max_ses_num <- param_list$max_ses_num
+    max_courses <- param_list$max_courses
+    completers_only <- param_list$completers_only
+    min_sev_baseline <- param_list$min_sev_baseline
+    min_sev_BDI <- param_list$min_sev_BDI
+    min_sev_BAI <- param_list$min_sev_BAI
+    min_obs <- param_list$min_obs
+    use_obs <- param_list$use_obs
+  }
+  
+  temp <- dplyr::filter(data, 
+                 n_tx_eval_tot >= min_ses_num,
+                 n_tx_eval_tot <= max_ses_num, 
+                 # need courses indicator still
+                 # need completer indicator still
+                 # need baseline severity indicators
+                 n_meas_obs_tot >= min_obs)
+  
+  # if using just pre or post data, trim it here and compute new variables
+  if(use_obs == "prepost" | use_obs == "post"){
+    temp <- temp %>% 
+      dplyr::filter(has.measure == 1) %>% 
+      group_by(new_id) %>% 
+      slice(c(1, n())) %>% 
+      mutate(first_BDI = first(BDI), 
+             first_BAI = first(BAI)) %>% 
+      dplyr::filter(first_BDI >= min_sev_BDI & first_BAI >= min_sev_BAI) %>% 
+      slice(n()) %>% 
+      ungroup()
+    
+    temp <- mutate(temp, 
+                   minimum_sessions = min_ses_num, 
+                   maximum_sessions = max_ses_num, 
+                   maximum_courses = max_courses, 
+                   minimum_BDI_bl = min_sev_BDI, 
+                   minimum_BAI_bl = min_sev_BAI, 
+                   minimum_observations = min_obs)
+  }
+  else if(use_obs == "all"){
+    temp <- temp %>% 
+      dplyr::filter(has.measure == 1) %>% 
+      group_by(new_id) %>% 
+      mutate(first_BDI = first(BDI), 
+             first_BAI = first(BAI)) %>% 
+      dplyr::filter(first_BDI >= min_sev_BDI & first_BAI >= min_sev_BAI) %>% 
+      ungroup()
+    
+    temp <- mutate(temp, 
+                   minimum_sessions = min_ses_num, 
+                   maximum_sessions = max_ses_num, 
+                   maximum_courses = max_courses, 
+                   minimum_BDI_bl = min_sev_BDI, 
+                   minimum_BAI_bl = min_sev_BAI, 
+                   minimum_observations = min_obs)
+  }
+  temp
+}
+```
+
+If you can make a filtered data set, the next step is to run an analysis on that data. The analysis needs to be parameterized as well. I'm only developing two main methods here: `lm()` and `lme4::lmer`. 
+
+These functions run your analysis with arbitrary covariates. They can assume that proper data manipulation has been done prior, however, by trim_data(). The goal is to take a data set, apply an analysis, and save the results in a reusable way.
+
+Function to generate list of predictor sets. Given the options available, this funciton will generate all feasible combinations of predictors/covariates in your model.  
+
+```{r}
+make_predictors <- function(..., options, target){
+  # options should just be a list of variables in the data set, 
+  # The function should return a list of lists - one for each set of predictor variables. Assumes that each predictor can either be included or NOT included. 
+  # target is required here because it HAS to be included in every model run.
+ 
+  # trying to use expand.grid(). 
+  to_expand <- list(0)
+  for(i in seq_along(options)){
+    to_expand[i] <- paste0("c(\"", as.character(options[i]), "\", NA)")
+  }
+  # this is HORRIBLE CODE - but it works? 
+  out <- expand.grid(eval(parse(text = paste0("list(", paste(unlist(to_expand), collapse = ', '), ")"))))
+  
+  # rename variable names from "Var1" to whatever the varaible is
+  for(i in seq_along(options)){
+    names(out)[i] <- levels(out[1, i])
+  }
+  
+  out <- cbind(out, target = rep(target, nrow(out)))
+  # the result is a matrix of rows with different variables included in each row. Every row is a unique permutation of the list.
+}
+```
+
+Once you have that matrix of all combinations, you need a function to isolate the predictors from just one row of that kind of data set and make it a list, without missing variables.  
+
+```{r}
+isolate_predictors <- function(..., x){
+  # x should be a single row of predictors, not including target, target
+  x <- x[!is.na(x)]
+  if(length(x) > 0){
+    return(x)
+  } 
+  else return(NULL)
+}
+```
+
+Code to conduct a linear pre-post analysis using parameters defined above:
+
+```{r}
+conduct_prepost <- function(..., 
+                            data, 
+                            predictors,
+                            outcome){
+  form <- as.formula(paste(outcome, paste(predictors, collapse = " + "), 
+        sep = " ~ "))
+  model <- lm(form, data = data)
+}
+ # note that predictors is a list of names of variables, as strings
+# the usage of that is like this: 
+# outcome <- conduct_prepost(data = test_data, predictors = c("n_tx_eval_tot", "n_noshow_tot", "week_since_first_attend", "ther_id"), outcome = "BDI")
+# result is a model, type lm. 
+# takes a dataset, list of predictors, and the name of the outcome variable. 
+
+
+# the function below does the same thing but adds capacity for variables that are included in every permutation (so-called "constants", though this is kind of confusing since they are actually variables)
+conduct_prepost_constant <- function(..., 
+                            data, 
+                            predictors,
+                            outcome, 
+                            constants = NULL){
+  
+  form <- as.formula(paste(outcome, paste(predictors, constants, collapse = " + ", sep = " + "), 
+        sep = " ~ "))
+  model <- lm(form, data = data)
+}
+
+# does the same thing but with lme4::lmer() instead of lm() Note it technically used lmerTest::lmer(), for the p-value calculation (though I don't really endorse this myself, typically).
+conduct_lmm_int_constant <- function(..., 
+                            data, 
+                            predictors,
+                            outcome, 
+                            constants = NULL, 
+                            ranef = "ther_id", 
+                            ranslope = "1"){
+  predictors_text <- paste(predictors, collapse = " + ")
+  constants_text <- paste(constants, collapse = " + ")
+  ranslope_text <- paste(ranslope, collapse = " + ")
+  ranef_text <- paste0("(", ranslope_text, " | ", ranef, ")")
+  form <- as.formula(paste(outcome, paste(paste(predictors, collapse = " + "),
+                                          paste(constants, collapse = " + "), 
+                                          paste(ranef_text, collapse = " + "), 
+                                          sep = " + "), 
+        sep = " ~ "))
+  model <- lmerTest::lmer(form, data = data)
+}
+```
+
+Need functions to extract the target effect test values from your models now. 
+
+```{r}
+extract_target_lm <- function(..., model, target){
+  values <- data.frame(as.list(coef(summary(model))[target, ]))
+  values$lower <- values[1, 1] - 1.96 * values[1, 2]
+  values$upper <- values[1, 1] + 1.96 * values[1, 2]
+  if("df" %in% names(values)){
+    values <- select(values, -df)
+  }
+  values
+}
+# result is a 1x6 dataframe with Estimate, SE, t val, and p val, lower, and upper
+# takes a model as the input, computed earlier
+
+# seems like the existing lm() version works for lme4 models, except it doesn't have a p value
+
+```
+
+
+So the conceptual flow right now might be:  
+
+  - trim data
+  - make predictors
+  - isolate predictors
+  - conduct analysis
+  - extract values
+
+Need to run isolate predictors, conduct analysis, and extracting values as one step - do every time. no time to be saved by separating them.  
+
+Trimming data should be done once and then all analyses done with that fixed data.  
+
+Making predictors should be done once, saved as list, and looked up as needed within each data set.  
+
+Isolate predictors should take a row from the predictors data and turn it into a list of usable variables.  
+
+Putting these steps together:  
+
+A function to run a set of analyses based on a single data set:  
+
+```{r}
+# this is the pre-post data set
+run_data <- function(..., 
+                     data, 
+                     predictors, 
+                     target = predictors$target[1],
+                     outcome = "BDI", 
+                     constants = "first_BDI"){
+  # data is the single data.frame to use
+  # predictors is the matrix of predictors to use
+  
+  out <- data.frame("Estimate" = 0,  
+                    "Std. Error" = 0,
+                    "t value" = 0,
+                    "Pr(>|t|)" = 0,
+                    "lower" = 0,
+                    "upper" = 0)
+  
+  for(i in 1:nrow(predictors)){  # for each predictor set
+    use_predictors <- isolate_predictors(x = predictors[i, ])
+    # use_predictors should be a list of the predictors to include
+    
+    mod <- conduct_prepost_constant(data = data, 
+                                    predictors = use_predictors, 
+                                    outcome = outcome, 
+                                    constants = constants)
+    # mod is an lm object
+    
+    extracts <- extract_target_lm(model = mod, target = target)
+    # extracts is a data frame with six outputted values
+    
+    out <- rbind(out, extracts)
+  }
+  out <- data.frame(out[2:nrow(out), ]) # cropping the first empty row.
+  out <- cbind(out, N = mod$df.residual)  # adding residual DF to get a sense of the size of the data effectively
+  out <- cbind(out, 
+               predictors, 
+               covariate_perm = 1:nrow(out), 
+               outcome_var = outcome, 
+               minimum_sessions = data$minimum_sessions[1], 
+               maximum_sessions = data$maximum_sessions[1],
+               maximum_courses = data$maximum_courses[1], 
+               minimum_BDI_bl = data$minimum_BDI_bl[1], 
+               minimum_BAI_bl = data$minimum_BAI_bl[1],
+               minimum_observations = data$minimum_observations[1], 
+               ran_ther_included = FALSE)  # adding a bunch of variables that are helpful later
+  out <- mutate(out, 
+                highlight = if_else(lower < 0 & upper < 0, "neg", 
+                                    if_else(lower < 0 & upper > 0, "ns", 
+                                            "pos")))
+}
+```
+
+That function takes a **SINGLE** data set (i.e., would have to be pre-filtered using `trim_data()`), takes a list of possible predictors to include in a linear pre-post `lm()` model, and outputs a `data.frame` with the estimates and 95% CI values. 
+
+Now making the lmm version:    
+
+```{r}
+run_data_lmm <- function(..., 
+                     data, 
+                     predictors, 
+                     target = predictors$target[1],
+                     outcome = "BDI", 
+                     constants = "first_BDI", 
+                     ranef = "ther_id", 
+                     ranslope = "1"){
+  # data is the single data.frame to use
+  # predictors is the matrix of predictors to use
+  
+  out <- data.frame("Estimate" = 0,  
+                    "Std. Error" = 0,
+                    "t value" = 0,
+                    "Pr(>|t|)" = 0,
+                    "lower" = 0,
+                    "upper" = 0)
+  
+  for(i in 1:nrow(predictors)){  # for each predictor set
+    use_predictors <- isolate_predictors(x = predictors[i, ])
+    # use_predictors should be a list of the predictors to include
+    
+    mod <- conduct_lmm_int_constant(data = data, 
+                                    predictors = use_predictors, 
+                                    outcome = outcome, 
+                                    constants = constants, 
+                                    ranef = ranef, 
+                                    ranslope = ranslope)
+    # mod is an lm object
+    
+    # only do anything if not singular
+    if(!isSingular(mod)){
+      extracts <- extract_target_lm(model = mod, target = target)
+      # extracts is a data frame with six outputted values
+    }
+    else{ # if it was singular, create NA values
+      extracts <- data.frame("Estimate" = NA,  
+                             "Std. Error" = NA,
+                             "t value" = NA,
+                             "Pr(>|t|)" = NA,
+                             "lower" = NA,
+                             "upper" = NA)
+    }
+    
+    out <- rbind(out, extracts)
+  }
+  out <- data.frame(out[2:nrow(out), ]) # cropping the first empty row.
+  out <- cbind(out, N = NA)  # adding residual DF to get a sense of the size of the data effectively. ONLY LEAVING IN bc don't want to bother righ tnow.
+  out <- cbind(out, 
+               predictors, 
+               covariate_perm = 1:nrow(out), 
+               outcome_var = outcome, 
+               minimum_sessions = data$minimum_sessions[1], 
+               maximum_sessions = data$maximum_sessions[1],
+               maximum_courses = data$maximum_courses[1], 
+               minimum_BDI_bl = data$minimum_BDI_bl[1], 
+               minimum_BAI_bl = data$minimum_BAI_bl[1],
+               minimum_observations = data$minimum_observations[1], 
+               ran_ther_included = TRUE)  # adding a bunch of variables that are helpful later
+  out <- mutate(out, 
+                highlight = if_else(lower < 0 & upper < 0, "neg", 
+                                    if_else(lower < 0 & upper > 0, "ns", 
+                                            "pos")))
+}
+```
+
+That works, but only takes one data set and conducts the analysis using many different predictor sets. 
+
+Now need a set of functions to automatically trim the data into different data sets, run the analysis on each, and then save ALL results in one data frame.
+
+```{r}
+run_multiple_trims <- function(...,
+                               data,
+                               min_ses_options = NA, 
+                               max_ses_options = NA,
+                               max_courses_options = NA,
+                               min_sev_BDI_options = NA,
+                               min_sev_BAI_options = NA,
+                               min_obs_options = NA, 
+                               predictors,  # string vector
+                               target, 
+                               outcome = "BDI", 
+                               constants = "first_BDI", 
+                               include_ran_thers = TRUE){
+
+  out <- expand.grid(min_ses_options, 
+                     max_ses_options, 
+                     max_courses_options, 
+                     min_sev_BDI_options, 
+                     min_sev_BAI_options, 
+                     min_obs_options)
+  names(out) <- c("min_ses_options", "max_ses_options", "max_courses_options", "min_sev_BDI_options", "min_sev_BAI_options", "min_obs_options")
+  # out here is just a matrix with all combinations of all the variables of interest. 
+
+  # define param_list_temp, will be altered on each iteration of next loop
+  param_list_temp <- list(data = data, 
+                          min_ses_num = 0, 
+                          max_ses_num = 100000, 
+                          max_courses = 1,
+                          completers_only = FALSE, 
+                          min_sev_baseline = 0, 
+                          min_sev_BDI = 0,
+                          min_sev_BAI = 0, 
+                          min_obs = 0, 
+                          use_obs = "prepost")
+
+  # define predictors_temp, which can be modified
+  predictors_temp <- make_predictors(options = predictors, target = target)
+
+  for(i in 1:nrow(out)){  # for each permutation of inputs
+    param_list_mod <- param_list_temp
+    
+    # if first variable is not NA, replace the value in param_list_mod with the corrsponding value from out. 
+    if(!is.na(out[i, 1])) {
+      param_list_mod$min_ses_num <- out[i, 1]
+    }
+    if(!is.na(out[i, 2])) {
+      param_list_mod$max_ses_num <- out[i, 2]
+    }
+    if(!is.na(out[i, 3])) {
+      param_list_mod$max_courses <- out[i, 3]
+    }
+    if(!is.na(out[i, 4])) {
+      param_list_mod$min_sev_BDI <- out[i, 4]
+    }
+    if(!is.na(out[i, 5])) {
+      param_list_mod$min_sev_BAI <- out[i, 5]
+    }
+    if(!is.na(out[i, 6])) {
+      param_list_mod$min_obs <- out[i, 6]
+    }
+    #need to repeat for all the variables
+
+    out_dat <- trim_data(data = data, 
+                         param_list = param_list_mod, 
+                         use_obs = "prepost")  
+    # param_list_mod is the MODIFED list of parameters, specific to this iteration.
+
+    ##### now ready to run this data set
+    out_analysis <- run_data(data = out_dat, 
+                             predictors = predictors_temp, 
+                             outcome = outcome, 
+                             constants = constants)
+    
+    # if random therapists should be included (at all, run here)
+    if(include_ran_thers){
+      out_analysis_lmm <- run_data_lmm(data = out_dat,
+                                       predictors = predictors_temp, 
+                                       outcome = outcome,
+                                       constants = constants,
+                                       ranef = "ther_id",
+                                       ranslope = "1")
+      # combining random and nonrandom outputs    
+      output1 <- rbind(out_analysis, out_analysis_lmm)
+    }
+    output1 <- out_analysis
+    
+    # now combining all the data into one dataset
+    if(i ==1){
+      output <- output1
+    }
+    else{
+      output <- rbind(output, output1)
+    }
+  }
+  output <- cbind(output, permutation = 1:nrow(output))
+  # output is a dataset with the specified variables
+}
+```
+
+Need a plotting function:  
+
+```{r}
+spec_curve <- function(data, 
+                       y = data$Estimate, 
+                       lower = data$lower, 
+                       upper = data$upper, 
+                       title = NULL){
+  ggplot(data = data, aes(x = reorder(permutation, y), 
+                          y = y, 
+                          ymin = lower, 
+                          ymax = upper)) + 
+    geom_hline(yintercept = 0) +
+    geom_pointrange(color = "lightblue", alpha = .5) +
+    theme_minimal() + 
+    theme(axis.text.x = element_blank(), 
+          axis.ticks = element_blank()) +
+    ylab("Estimate (95% CI)") + 
+    xlab("Permutation") + 
+    ggtitle(title)
+}
+```
+
+
+### Part 2: Final application 
+
+Running the simulated data and seeing the result!
+
+Starting with some basic parameters from which we simulate data (real data is presented in the slides but cannot be shared, hence this meaningless simulation). Note that actual data generating process does not resemble my simulation.  
+
+**You can edit this to see what effect it has on the outcome.**  
+
+```{r simulation parameters}
+# simulation parameters:
+# number of patients
+n_patients <- 100  
+# number of therapists
+n_thers <- 2
+# number of observations per patient
+n_obs_per_pt <- 5 # must be over 2
+
+first_BDI_mean <- 25
+first_BDI_sd <- 10
+
+week_tx_mean <- 10
+week_tx_sd <- 4
+
+final_BDI_mean <- 5
+final_BDI_sd <- 10
+```
+
+Once the parameters are established, the code below will generate data (`sim_data`) based on them. 
+
+```{r create simulated data}
+sim_data <- tibble(new_id = factor(sort(rep(1:n_patients, 
+                                            n_obs_per_pt))), 
+                   ther_id = factor(sort(rep(1:n_thers, 
+                                             (n_patients * n_obs_per_pt)/n_thers))), 
+                   n_tx_eval_tot = rep(sample(1:(n_obs_per_pt + 2), 
+                                              n_patients, 
+                                              replace = TRUE), 
+                                       each = n_obs_per_pt), 
+                   n_meas_obs_tot = n_tx_eval_tot, # idiosyncratic to applied data
+                   gender = rep(sample(1:2, n_patients, replace = T), 
+                                each = n_obs_per_pt), 
+                   n_noshow_tot = rep(sample(0:(n_obs_per_pt - 2), 
+                                             n_patients, 
+                                             replace = TRUE), 
+                                      each = n_obs_per_pt), 
+                   first_BDI = rep(rnorm(n = n_patients, 
+                                         mean = first_BDI_mean, 
+                                         sd = first_BDI_sd), 
+                                      each = n_obs_per_pt) %>% 
+                     round(digits = 0), 
+                   week_tx_tot = rep(rnorm(n = n_patients, 
+                                         mean = week_tx_mean, 
+                                         sd = week_tx_sd), 
+                                      each = n_obs_per_pt) %>% 
+                     round(digits = 0),
+                   obs_number = rep(1:n_obs_per_pt, 
+                                    times = n_patients),
+                   week_since_first_attend = ((week_tx_tot/(n_obs_per_pt - 1)) * (obs_number - 1)), 
+                   ethnicity = sample(1:4, n_patients, replace = TRUE) %>% 
+                     rep(each = n_obs_per_pt), 
+                   age = rnorm(n = n_patients, 
+                               mean = 35,
+                               sd = 10) %>% 
+                     rep(each = n_obs_per_pt) %>% 
+                     round(digits = 0), 
+                   final_BDI = rep(rnorm(n = n_patients, 
+                                         mean = final_BDI_mean, 
+                                         sd = final_BDI_sd), 
+                                      each = n_obs_per_pt) %>% 
+                     round(digits = 0) %>% 
+                     replace(. < 0, 0),
+                   BDI = ((.data$final_BDI - .data$first_BDI) / .data$week_tx_tot) * .data$week_since_first_attend + .data$first_BDI, 
+                   BAI = 10, 
+                   has.measure = 1)
+```
+
+
+After the data is created, it can be sent through `run_multiple_trims()`, our function to conduct the specification curve analysis.  
+
+Note that the options for each input are entered as vector arguments. Single-item vectors can be used. The code breaks in some instances where the options are so similar that they overlap entirely (not a likely problem in real data, but likely in simulation).  
+
+```{r run simulated data}
+sim_out <- run_multiple_trims(min_ses_options = c(1, 0), 
+                              max_ses_options = c(6, 10),
+                              min_sev_BDI_options = c(0, 10, 18),
+                              predictors = c("gender", "n_tx_eval_tot", "n_noshow_tot", "week_since_first_attend", "ethnicity"), 
+                              constants = c("first_BDI"), 
+                              target = "age", 
+                              data = sim_data, 
+                              include_ran_thers = FALSE)
+```
+
+Now we can finally see the result, by plotting the specification curve:  
+
+```{r plot the specification curve}
+spec_curve(data = sim_out, 
+           title = paste("Specification curve for", sim_out$target, "on final", sim_out$outcome_var, "\nBased on", nrow(sim_out), "permutations")) + 
+  geom_point(aes(color = highlight, fill = highlight), size = 2, shape = 21) + 
+  theme(panel.grid.minor = element_blank(), 
+        panel.grid.major = element_blank())
+```
+
+Note that nominally somewhere close to the 5% of the 95% CIs should be significant findings for this very null data. if you find parameters that consistently generate more than that, I'd be curious what's going on!  
+
+### Next steps  
+
+This is not done, there are a number of next steps to take. Most importantly, you would want to examine which research choices made the most systematic difference in the estimate size and signficance. if some parameter choices are always significant, that says something important about the data. I did not apply the full graphics in this analysis, due to time constraints, but it is in the works.  
