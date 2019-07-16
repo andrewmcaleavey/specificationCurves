@@ -6,18 +6,19 @@
 #' @param min_ses_num Minimum number of sessions required
 #' @param max_ses_num Maximum number of sessions allowed
 #' @param max_courses Maximum number of courses of treatment allowed
-#' @param completers_only
-#' @param min_sev_baseline
-#' @param min_sev_BDI
-#' @param min_sev_BAI
-#' @param min_obs
-#' @param use_obs
-#' @param param_list
+#' @param completers_only Logical. Should only completers be used?
+#' @param min_sev_baseline Minimum initial severity, outcome not defined.
+#' @param min_sev_BDI Minimum initial severity on the BDI.
+#' @param min_sev_BAI Minimum initial severity on the BAI.
+#' @param min_obs Minimum number of observations per patient.
+#' @param use_obs Which observations to use? Options: "prepost", "post", and "all".
+#' @param param_list Optional list of parameter values that overwrite existing parameters if included.
 #'
-#' @return
+#' @return a trimmed dataset
 #' @export
 #'
 #' @examples
+#' trim_data(data = sim_data)
 trim_data <- function(...,
                       data,
                       min_ses_num = 0,
@@ -92,4 +93,38 @@ trim_data <- function(...,
                    minimum_observations = min_obs)
   }
   temp
+}
+
+
+#' Generate permutations of predictors with varying options
+#'
+#' @param ... Additional arguments
+#' @param options A list of variables in the data set
+#' @param target The variable in the data set that will be analyzed for its effect
+#'
+#' @return A matrix in which each row is a unique permutation of the options for each variable
+#' @export
+#'
+#' @examples
+#' make_predictors(options = c("BAI", "first_BDI"), target = "age")
+make_predictors <- function(..., options, target){
+  # options should just be a list of variables in the data set,
+  # The function should return a list of lists - one for each set of predictor variables. Assumes that each predictor can either be included or NOT included.
+  # target is required here because it HAS to be included in every model run.
+
+  # trying to use expand.grid().
+  to_expand <- list(0)
+  for(i in seq_along(options)){
+    to_expand[i] <- paste0("c(\"", as.character(options[i]), "\", NA)")
+  }
+  # this is HORRIBLE CODE - but it works?
+  out <- expand.grid(eval(parse(text = paste0("list(", paste(unlist(to_expand), collapse = ', '), ")"))))
+
+  # rename variable names from "Var1" to whatever the varaible is
+  for(i in seq_along(options)){
+    names(out)[i] <- levels(out[1, i])
+  }
+
+  out <- cbind(out, target = rep(target, nrow(out)))
+  # the result is a matrix of rows with different variables included in each row. Every row is a unique permutation of the list.
 }

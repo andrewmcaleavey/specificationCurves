@@ -13,3 +13,4 @@ Encoding: UTF-8
 LazyData: true
 URL: https://github.com/andrewmcaleavey/specificationCurves
 BugReports: https://github.com/andrewmcaleavey/specificationCurves/issues
+RoxygenNote: 6.1.1
