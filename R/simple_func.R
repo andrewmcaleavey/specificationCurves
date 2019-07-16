@@ -128,3 +128,131 @@ make_predictors <- function(..., options, target){
   out <- cbind(out, target = rep(target, nrow(out)))
   # the result is a matrix of rows with different variables included in each row. Every row is a unique permutation of the list.
 }
+
+#' Isolate one permutation of non-NA predictors from a previously-defined
+#' row of a matrix of predictor permutations
+#'
+#' @param ... Additional arguments passed on from other functions
+#' @param x The predictor permutation to use
+#'
+#' @return A vector with just the non-NA predictors
+#' @export
+#'
+#' @examples
+#' isolate_predictors(x = c("age", NA, "first_BDI"))
+#'
+#' @details
+#' This function exists only to remove NA values from lists of predictors
+#' If x is entirely NA, returns NULL, which is compatible with lm() and lmer() formula definitions.
+isolate_predictors <- function(..., x){
+  # x should be a single row of predictors, not including target, target
+  x <- x[!is.na(x)]
+  if(length(x) > 0){
+    return(x)
+  }
+  else return(NULL)
+}
+
+#' Conduct analysis of pre-post data WITHOUT constants.
+#' Obsolete, use conduct_prepost_constant() instead.
+#'
+#' @param ... Additional variables
+#' @param data Data to use
+#' @param predictors List of predictors to include in formula
+#' @param outcome Variable to use as the outcome of the lm() call
+#'
+#' @return an lm() model
+#' @export
+#'
+#' @examples
+#' outcome <- conduct_prepost(data = test_data,
+#'   predictors = c("n_tx_eval_tot", "n_noshow_tot", "week_since_first_attend", "ther_id"),
+#'   outcome = "BDI")
+conduct_prepost <- function(...,
+                            data,
+                            predictors,
+                            outcome){
+  form <- as.formula(paste(outcome, paste(predictors, collapse = " + "),
+                           sep = " ~ "))
+  model <- lm(form, data = data)
+}
+# note that predictors is a list of names of variables, as strings
+# the usage of that is like this:
+# outcome <- conduct_prepost(data = test_data, predictors = c("n_tx_eval_tot", "n_noshow_tot", "week_since_first_attend", "ther_id"), outcome = "BDI")
+# result is a model, type lm.
+# takes a dataset, list of predictors, and the name of the outcome variable.
+
+
+#' Conduct analysis of pre-post data WITH constants.
+#'
+#' @param ... Additional variables
+#' @param data Data to use
+#' @param predictors List of predictors to include in formula
+#' @param outcome Variable to use as the outcome of the lm() call
+#' @param constants List of variables that will be in EVERY permutation.
+#' Entered separately from predictors at present.
+#'
+#' @return a model of type lm
+#' @export
+#'
+#' @examples
+#' outcome <- conduct_prepost_constant(data = test_data,
+#'   predictors = c("n_tx_eval_tot", "n_noshow_tot", "week_since_first_attend", "ther_id"),
+#'   constants = c("first_BDI"),
+#'   outcome = "BDI")
+conduct_prepost_constant <- function(...,
+                                     data,
+                                     predictors,
+                                     outcome,
+                                     constants = NULL){
+
+  form <- as.formula(paste(outcome, paste(predictors, constants, collapse = " + ", sep = " + "),
+                           sep = " ~ "))
+  model <- lm(form, data = data)
+}
+
+# does the same thing but with lme4::lmer() instead of lm() Note it technically uses lmerTest::lmer(), for the p-value calculation (though I don't really endorse this myself, typically).
+#' Conduct analysis using lmerTest::lmer()
+#'
+#' @param ... Additional variables
+#' @param data Data to use
+#' @param predictors List of predictors to include in formula
+#' @param outcome Variable to use as the outcome of the lm() call
+#' @param constants List of variables that will be in EVERY permutation.
+#' Entered separately from predictors at present.
+#' @param ranef The random effects variables
+#' @param ranslope Variables (if any) to be included as slopes.
+#'
+#' @return A model of type lmerMod
+#' @export
+#'
+#' @examples
+#' out <- conduct_lmm_int_constant(data = test_data,
+#'   predictors = c("n_tx_eval_tot", "n_noshow_tot", "week_since_first_attend", "ther_id"),
+#'   constants = c("first_BDI"),
+#'   outcome = "BDI")
+#'
+#' @details This function only tolerates one grouping variable at present.
+#' Or more directly, one parenthetical feature per formula, so it is possible that a
+#' specification like \code{(1 | therapist/patient)} could work?
+#' It should tolerate multiple slope variables, though.
+conduct_lmm_int_constant <- function(...,
+                                     data,
+                                     predictors,
+                                     outcome,
+                                     constants = NULL,
+                                     ranef = "ther_id",
+                                     ranslope = "1"){
+  predictors_text <- paste(predictors, collapse = " + ")
+  constants_text <- paste(constants, collapse = " + ")
+  ranslope_text <- paste(ranslope, collapse = " + ")
+  ranef_text <- paste0("(", ranslope_text, " | ", ranef, ")")
+  form <- as.formula(paste(outcome, paste(paste(predictors, collapse = " + "),
+                                          paste(constants, collapse = " + "),
+                                          paste(ranef_text, collapse = " + "),
+                                          sep = " + "),
+                           sep = " ~ "))
+  model <- lmerTest::lmer(form, data = data)
+}
+
+
