@@ -255,4 +255,288 @@ conduct_lmm_int_constant <- function(...,
   model <- lmerTest::lmer(form, data = data)
 }
 
+#' Extract values of interest from lm and lmerMod objects
+#'
+#' @param ... Additional variables
+#' @param model Model to extract from
+#' @param target Name of the variable predictor of interest
+#'
+#' @return a 1x6 data frame with Estimate, SE, t val, and p val, lower, and upper
+#' @export
+#'
+#' @examples
+#' extract_target_lm(model = model, target = "age")
+extract_target_lm <- function(..., model, target){
+  values <- data.frame(as.list(coef(summary(model))[target, ]))
+  values$lower <- values[1, 1] - 1.96 * values[1, 2]
+  values$upper <- values[1, 1] + 1.96 * values[1, 2]
+  if("df" %in% names(values)){
+    values <- select(values, -df)
+  }
+  values
+}
+# result is a 1x6 dataframe with Estimate, SE, t val, and p val, lower, and upper
+# takes a model as the input, computed earlier
 
+#' Run a single data permutation through multiple predictor permutations
+#'
+#' @param ...
+#' @param data
+#' @param predictors
+#' @param target
+#' @param outcome
+#' @param constants
+#'
+#' @return
+#' @export
+#'
+#' @examples
+run_data <- function(...,
+                     data,
+                     predictors,
+                     target = predictors$target[1],
+                     outcome = "BDI",
+                     constants = "first_BDI"){
+  # data is the single data.frame to use
+  # predictors is the matrix of predictors to use
+
+  out <- data.frame("Estimate" = 0,
+                    "Std. Error" = 0,
+                    "t value" = 0,
+                    "Pr(>|t|)" = 0,
+                    "lower" = 0,
+                    "upper" = 0)
+
+  for(i in 1:nrow(predictors)){  # for each predictor set
+    use_predictors <- isolate_predictors(x = predictors[i, ])
+    # use_predictors should be a list of the predictors to include
+
+    mod <- conduct_prepost_constant(data = data,
+                                    predictors = use_predictors,
+                                    outcome = outcome,
+                                    constants = constants)
+    # mod is an lm object
+
+    extracts <- extract_target_lm(model = mod, target = target)
+    # extracts is a data frame with six outputted values
+
+    out <- rbind(out, extracts)
+  }
+  out <- data.frame(out[2:nrow(out), ]) # cropping the first empty row.
+  out <- cbind(out, N = mod$df.residual)  # adding residual DF to get a sense of the size of the data effectively
+  out <- cbind(out,
+               predictors,
+               covariate_perm = 1:nrow(out),
+               outcome_var = outcome,
+               minimum_sessions = data$minimum_sessions[1],
+               maximum_sessions = data$maximum_sessions[1],
+               maximum_courses = data$maximum_courses[1],
+               minimum_BDI_bl = data$minimum_BDI_bl[1],
+               minimum_BAI_bl = data$minimum_BAI_bl[1],
+               minimum_observations = data$minimum_observations[1],
+               ran_ther_included = FALSE)  # adding a bunch of variables that are helpful later
+  out <- mutate(out,
+                highlight = if_else(lower < 0 & upper < 0, "neg",
+                                    if_else(lower < 0 & upper > 0, "ns",
+                                            "pos")))
+}
+
+#' Run a single data frame through multiple predictor permutations with lmer()
+#'
+#' @param ...
+#' @param data
+#' @param predictors
+#' @param target
+#' @param outcome
+#' @param constants
+#' @param ranef
+#' @param ranslope
+#'
+#' @return
+#' @export
+#'
+#' @examples
+run_data_lmm <- function(...,
+                         data,
+                         predictors,
+                         target = predictors$target[1],
+                         outcome = "BDI",
+                         constants = "first_BDI",
+                         ranef = "ther_id",
+                         ranslope = "1"){
+  # data is the single data.frame to use
+  # predictors is the matrix of predictors to use
+
+  out <- data.frame("Estimate" = 0,
+                    "Std. Error" = 0,
+                    "t value" = 0,
+                    "Pr(>|t|)" = 0,
+                    "lower" = 0,
+                    "upper" = 0)
+
+  for(i in 1:nrow(predictors)){  # for each predictor set
+    use_predictors <- isolate_predictors(x = predictors[i, ])
+    # use_predictors should be a list of the predictors to include
+
+    mod <- conduct_lmm_int_constant(data = data,
+                                    predictors = use_predictors,
+                                    outcome = outcome,
+                                    constants = constants,
+                                    ranef = ranef,
+                                    ranslope = ranslope)
+    # mod is an lm object
+
+    # only do anything if not singular
+    if(!isSingular(mod)){
+      extracts <- extract_target_lm(model = mod, target = target)
+      # extracts is a data frame with six outputted values
+    }
+    else{ # if it was singular, create NA values
+      extracts <- data.frame("Estimate" = NA,
+                             "Std. Error" = NA,
+                             "t value" = NA,
+                             "Pr(>|t|)" = NA,
+                             "lower" = NA,
+                             "upper" = NA)
+    }
+
+    out <- rbind(out, extracts)
+  }
+  out <- data.frame(out[2:nrow(out), ]) # cropping the first empty row.
+  out <- cbind(out, N = NA)  # adding residual DF to get a sense of the size of the data effectively. ONLY LEAVING IN bc don't want to bother righ tnow.
+  out <- cbind(out,
+               predictors,
+               covariate_perm = 1:nrow(out),
+               outcome_var = outcome,
+               minimum_sessions = data$minimum_sessions[1],
+               maximum_sessions = data$maximum_sessions[1],
+               maximum_courses = data$maximum_courses[1],
+               minimum_BDI_bl = data$minimum_BDI_bl[1],
+               minimum_BAI_bl = data$minimum_BAI_bl[1],
+               minimum_observations = data$minimum_observations[1],
+               ran_ther_included = TRUE)  # adding a bunch of variables that are helpful later
+  out <- mutate(out,
+                highlight = if_else(lower < 0 & upper < 0, "neg",
+                                    if_else(lower < 0 & upper > 0, "ns",
+                                            "pos")))
+}
+
+#' Run a complete specification curve analysis:
+#' Given a data frame and the options, trim it in every permutation
+#' and run each with every predictor permutation available.
+#'
+#' @param ...
+#' @param data
+#' @param min_ses_options
+#' @param max_ses_options
+#' @param max_courses_options
+#' @param min_sev_BDI_options
+#' @param min_sev_BAI_options
+#' @param min_obs_options
+#' @param predictors
+#' @param target
+#' @param outcome
+#' @param constants
+#' @param include_ran_thers
+#'
+#' @return
+#' @export
+#'
+#' @examples
+run_multiple_trims <- function(...,
+                               data,
+                               min_ses_options = NA,
+                               max_ses_options = NA,
+                               max_courses_options = NA,
+                               min_sev_BDI_options = NA,
+                               min_sev_BAI_options = NA,
+                               min_obs_options = NA,
+                               predictors,  # string vector
+                               target,
+                               outcome = "BDI",
+                               constants = "first_BDI",
+                               include_ran_thers = TRUE){
+
+  out <- expand.grid(min_ses_options,
+                     max_ses_options,
+                     max_courses_options,
+                     min_sev_BDI_options,
+                     min_sev_BAI_options,
+                     min_obs_options)
+  names(out) <- c("min_ses_options", "max_ses_options", "max_courses_options", "min_sev_BDI_options", "min_sev_BAI_options", "min_obs_options")
+  # out here is just a matrix with all combinations of all the variables of interest.
+
+  # define param_list_temp, will be altered on each iteration of next loop
+  param_list_temp <- list(data = data,
+                          min_ses_num = 0,
+                          max_ses_num = 100000,
+                          max_courses = 1,
+                          completers_only = FALSE,
+                          min_sev_baseline = 0,
+                          min_sev_BDI = 0,
+                          min_sev_BAI = 0,
+                          min_obs = 0,
+                          use_obs = "prepost")
+
+  # define predictors_temp, which can be modified
+  predictors_temp <- make_predictors(options = predictors, target = target)
+
+  for(i in 1:nrow(out)){  # for each permutation of inputs
+    param_list_mod <- param_list_temp
+
+    # if first variable is not NA, replace the value in param_list_mod with the corrsponding value from out.
+    if(!is.na(out[i, 1])) {
+      param_list_mod$min_ses_num <- out[i, 1]
+    }
+    if(!is.na(out[i, 2])) {
+      param_list_mod$max_ses_num <- out[i, 2]
+    }
+    if(!is.na(out[i, 3])) {
+      param_list_mod$max_courses <- out[i, 3]
+    }
+    if(!is.na(out[i, 4])) {
+      param_list_mod$min_sev_BDI <- out[i, 4]
+    }
+    if(!is.na(out[i, 5])) {
+      param_list_mod$min_sev_BAI <- out[i, 5]
+    }
+    if(!is.na(out[i, 6])) {
+      param_list_mod$min_obs <- out[i, 6]
+    }
+    #need to repeat for all the variables
+
+    out_dat <- trim_data(data = data,
+                         param_list = param_list_mod,
+                         use_obs = "prepost")
+    # param_list_mod is the MODIFED list of parameters, specific to this iteration.
+
+    ##### now ready to run this data set
+    out_analysis <- run_data(data = out_dat,
+                             predictors = predictors_temp,
+                             outcome = outcome,
+                             constants = constants)
+
+    # if random therapists should be included (at all, run here)
+    if(include_ran_thers){
+      out_analysis_lmm <- run_data_lmm(data = out_dat,
+                                       predictors = predictors_temp,
+                                       outcome = outcome,
+                                       constants = constants,
+                                       ranef = "ther_id",
+                                       ranslope = "1")
+      # combining random and nonrandom outputs
+      output1 <- rbind(out_analysis, out_analysis_lmm)
+    }
+    output1 <- out_analysis
+
+    # now combining all the data into one dataset
+    if(i ==1){
+      output <- output1
+    }
+    else{
+      output <- rbind(output, output1)
+    }
+  }
+  output <- cbind(output, permutation = 1:nrow(output))
+  # output is a dataset with the specified variables
+}
