@@ -17,7 +17,7 @@ Useful links:
 
 }
 \author{
-\strong{Maintainer}: First Last \email{first.last@example.com} (YOUR-ORCID-ID)
+\strong{Maintainer}: Andrew McAleavey \email{andrew.mcaleavey@gmail.com} (0000-0001-5986-2033)
 
 }
 \keyword{internal}

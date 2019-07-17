@@ -421,25 +421,26 @@ run_data_lmm <- function(...,
                                             "pos")))
 }
 
-#' Run a complete specification curve analysis:
-#' Given a data frame and the options, trim it in every permutation
+#' Run a complete specification curve analysis
+#'
+#' @description Given a data frame and the options, trim it in every permutation
 #' and run each with every predictor permutation available.
 #'
-#' @param ...
-#' @param data
-#' @param min_ses_options
-#' @param max_ses_options
-#' @param max_courses_options
-#' @param min_sev_BDI_options
-#' @param min_sev_BAI_options
-#' @param min_obs_options
-#' @param predictors
-#' @param target
-#' @param outcome
-#' @param constants
-#' @param include_ran_thers
+#' @param ... Additional arguments
+#' @param data Data set
+#' @param min_ses_options Minimum number of sessions attended
+#' @param max_ses_options Maximum number of sessions attended
+#' @param max_courses_options Maximum number of courses allowed
+#' @param min_sev_BDI_options Minimim initial severity of BDI
+#' @param min_sev_BAI_options Minimum initial severity of BAI
+#' @param min_obs_options Minimum number of observations per patient
+#' @param predictors List of predictors to permute
+#' @param target The target effect
+#' @param outcome The outcome variable
+#' @param constants List of variables to including in all permutations
+#' @param include_ran_thers Logical: should random therapists be included as an option?
 #'
-#' @return
+#' @return a \code{tibble} with outcome of all analyses
 #' @export
 #'
 #' @examples
