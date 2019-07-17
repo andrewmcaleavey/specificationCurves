@@ -7,10 +7,12 @@ The goal of specificationCurves is to provide functions for flexible application
 
 ## Installation
 
-You can install the released version of specificationCurves from [CRAN](https://CRAN.R-project.org) with:
+You can install the development version of specificationCurves from [GitHub](https://github.com) with:
 
 ``` r
-install.packages("specificationCurves")
+# requires the {devtools} package to be installed already
+library(devtools)
+install_github("andrewmcaleavey/specificationCurves")
 ```
 
 ## Example
